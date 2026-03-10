@@ -1069,6 +1069,59 @@ Expected response:
 }
 ```
 
+#### `POST {PMS_API_URL}/api/search_guest_by_phone`
+
+> ⚠️ **Required for custom adapters.** Used by `guest_lookup_node` on every inbound message and by the scheduler when creating sessions from booking events. Without this endpoint, all guests will be treated as unknown contacts.
+
+Request body:
+```json
+{ "phone": "+39333111222" }
+```
+
+Expected response (guest found):
+```json
+{
+  "id": "G001",
+  "name": "Marco Rossi",
+  "phone": "+39333111222",
+  "email": "marco.rossi@email.it",
+  "language": "it",
+  "loyalty_tier": "gold",
+  "past_stays": 5,
+  "preferences": ["camera silenziosa", "piano alto"]
+}
+```
+
+Expected response (guest not found): `null`
+
+#### `POST {PMS_API_URL}/api/search_booking_by_phone`
+
+> ⚠️ **Required for custom adapters.** Used by `guest_lookup_node` to load the active booking for a known guest and by the scheduler when reconstructing session state from a booking event.
+
+Request body:
+```json
+{ "phone": "+39333111222" }
+```
+
+Expected response (booking found — must be the most recent active booking):
+```json
+{
+  "id": "B1001",
+  "guest_id": "G001",
+  "phone": "+39333111222",
+  "checkin": "2026-03-15",
+  "checkout": "2026-03-18",
+  "room_type": "double",
+  "num_guests": 2,
+  "services": ["colazione inclusa"],
+  "total_eur": 420,
+  "status": "confirmed",
+  "special_requests": "camera al piano alto"
+}
+```
+
+Expected response (no active booking): `null`
+
 ---
 
 ### 10.2 Writing a Custom PMS Adapter
