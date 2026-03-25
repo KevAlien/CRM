@@ -1653,9 +1653,20 @@ Contributions are welcome. Please read `CONTRIBUTING.md` in the repository root 
 
 ### License
 
-This project is released under a **custom non-commercial licence**. See `LICENSE` in the repository root for the full terms.
+This project is released under the **MIT + Commons Clause licence**.
 
-For commercial licensing enquiries, contact the maintainer via the contact information on their GitHub profile.
+This means:
+- ✅ Free to use, study, modify, and share for non-commercial purposes
+- ❌ You may not use this software to provide a paid service, charge fees,
+  or generate revenue without a separate commercial licence
+- ℹ️ The software is provided "as-is" — no warranties, no guaranteed support
+
+For the full licence text, see `LICENSE` in the repository root.
+
+**Commercial deployments** require a separate written agreement with the
+maintainer. Contact details are available on the maintainer's GitHub profile.
+If you are reading this manual as part of a commercial deployment, a
+`COMMERCIAL_LICENSE.md` file should be present in your copy of the repository.
 
 ---
 

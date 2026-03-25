@@ -196,10 +196,26 @@ Full documentation is available in [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md):
 
 ---
 
-## Licence
+## Licensing
 
-This project is released for **non-commercial use only**.
+This project uses a **dual licensing model**.
 
-For commercial licensing — including deploying this system in a revenue-generating hospitality business — contact the maintainer via the contact information on their GitHub profile.
+**Non-commercial use (default):**
+Free to use, modify, and distribute under the terms of the
+[MIT + Commons Clause licence](./LICENSE).
+This means you may not use this software — or any substantial part of it —
+to provide a commercial service, charge fees, or generate revenue,
+without explicit written permission from the author.
 
-See [`LICENSE`](LICENSE) for full terms.
+**Commercial use:**
+If you want to deploy this software in a revenue-generating context
+(e.g. a hotel, hospitality business, or SaaS product), you need a
+separate commercial licence.
+
+Contact the maintainer via GitHub to discuss terms.
+The commercial licence is granted on a case-by-case basis and includes
+an explicit "as-is" clause — no warranties, no guaranteed support,
+no liability on the part of the author.
+
+> Already have a commercial licence? See `COMMERCIAL_LICENSE.md`
+> for the terms that apply to your deployment.
