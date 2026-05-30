@@ -86,6 +86,11 @@ async def save_session(phone: str, state: GuestState) -> bool:
     Aggiorna automaticamente last_interaction.
     Ritorna True se il salvataggio ha avuto successo.
     """
+    MAX_HISTORY_ENTRIES = 50
+    history = state.get("conversation_history", [])
+    if len(history) > MAX_HISTORY_ENTRIES:
+        state["conversation_history"] = history[-MAX_HISTORY_ENTRIES:]
+
     # Aggiorna timestamp ultima interazione
     state["last_interaction"] = datetime.utcnow().isoformat()
     key = _session_key(phone)
