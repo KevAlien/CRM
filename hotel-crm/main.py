@@ -24,7 +24,7 @@ def _get_user_lock(phone: str) -> asyncio.Lock:
     return _user_locks[phone]
 
 import uvicorn
-from fastapi import FastAPI, Request, Response, HTTPException, Query
+from fastapi import FastAPI, Header, Request, Response, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 import json
@@ -230,12 +230,15 @@ async def handle_pms_booking(request: Request) -> JSONResponse:
 @app.post("/staff/resume-bot")
 async def resume_bot(
     phone: str = Query(..., description="Numero di telefono dell'ospite"),
-    token: str = Query(..., description="Token di autenticazione staff"),
+    authorization: str = Header(None, alias="Authorization"),
 ) -> JSONResponse:
     """
     Riattiva il bot per una sessione in pausa (post-escalation).
-    Richiede STAFF_API_TOKEN configurato in .env.
+    Richiede header: Authorization: Bearer <STAFF_API_TOKEN>
     """
+    token = ""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
     if not STAFF_API_TOKEN or token != STAFF_API_TOKEN:
         raise HTTPException(status_code=403, detail="Token non valido")
 
