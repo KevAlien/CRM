@@ -1,5 +1,5 @@
 # ROADMAP — hotel-crm Remediation
-*Generata: 2026-05-30 | Aggiornata: 2026-05-30 | Basata su: arch-critic audit + arch-fix plan*
+*Generata: 2026-05-30 | Aggiornata: 2026-05-30 | Basata su: arch-critic audit × 2 + arch-fix plan*
 
 ---
 
@@ -13,6 +13,11 @@ orologeria** che si manifestano in produzione entro i primi giorni di operativit
 **Sprint 0, 1, 2 completati** — branch `remediation/2026-05-30`, 10 commit applicati.
 I fix P0–P3 sono nel codice. Rimangono i **smoke test runtime** (richiedono Redis + server attivo)
 e gli **Sprint 3–4** (profiling Ollama e tech debt).
+
+**Seconda autopsia di sicurezza (2026-05-30)** — identificate 4 nuove superfici di attacco
+nel codice post-remediation. Il fix del webhook (FIX-01) ha chiuso la porta principale
+lasciandone aperta una equivalente: `POST /pms/booking-event` è completamente privo di
+autenticazione. Aggiunto **Sprint 0-SEC** da eseguire prima di qualsiasi deploy.
 
 ---
 
@@ -38,6 +43,60 @@ e gli **Sprint 3–4** (profiling Ollama e tech debt).
 - 🔲 `DEV_MODE=true` bypassa la verifica firma senza errori
 - 🔲 50 messaggi simultanei → connessioni Redis attive ≤ `max_connections`
 - ✅ Redis down → log `ERROR` visibile, nessun crash silenzioso *(verificato in test)*
+
+---
+
+## Sprint 0-SEC — Hardening Sicurezza (seconda autopsia)
+**Stato: 🔴 APERTO — blocca il deploy**
+**Obiettivo:** chiudere le superfici di attacco emerse dall'analisi post-remediation.
+**Regola:** nessun deploy in produzione prima che SEC-01 sia applicato.
+
+### Vulnerabilità identificate
+
+**🔴 SEC-01 — `POST /pms/booking-event` senza autenticazione** *(P0)*
+L'endpoint accetta qualsiasi payload senza verificare il mittente. Chiunque conosca l'URL può
+iniettare prenotazioni false e far inviare messaggi WhatsApp reali a numeri arbitrari,
+o cancellare job di prenotazioni reali via `booking_cancelled`.
+Stesso vettore di FIX-01, porta diversa.
+
+**🟡 SEC-02 — `STAFF_API_TOKEN` nel query string** *(P1)*
+`POST /staff/resume-bot?token=SECRET` espone il token in log nginx/proxy, cronologia browser,
+header `Referer`. Un token in URL non è segreto. Spostare in header `Authorization: Bearer`.
+
+**🟡 SEC-03 — `GET /health` espone `DEV_MODE`** *(P1)*
+Informa l'attaccante che in dev la verifica firma webhook è bypassata. Se il sistema viene
+esposto accidentalmente con `DEV_MODE=true`, lo scopre prima di tentare l'attacco.
+
+**🟡 SEC-04 — `/docs` e `/redoc` pubblici in produzione** *(P1)*
+FastAPI espone lo schema completo degli endpoint (incluso `/pms/booking-event` con payload)
+senza autenticazione. Disabilitare in `DEV_MODE=false`.
+
+**🟡 SEC-05 — Nessun rate limiting** *(P2)*
+`/pms/booking-event` e `/staff/resume-bot` non hanno limiti di frequenza. Bruteforce
+sul token e flood di eventi PMS sono possibili senza freni.
+
+### Fix da applicare
+
+| Fix | Descrizione | File | Rischio |
+|-----|-------------|------|---------|
+| SEC-01 | Aggiungere `PMS_API_SECRET` header su `POST /pms/booking-event` | `main.py`, `config.py` | Basso |
+| SEC-02 | Token staff da query param → header `Authorization: Bearer` | `main.py` | Basso* |
+| SEC-03 | Rimuovere `dev_mode` dalla risposta `/health` | `main.py` | Minimo |
+| SEC-04 | Disabilitare `/docs` e `/redoc` se `DEV_MODE=false` | `main.py` | Minimo |
+| SEC-05 | Rate limiting su endpoint sensibili (slowapi o middleware) | `main.py`, `requirements.txt` | Medio |
+
+**⚠ SEC-02** — spostare il token in header rompe i client esistenti che usano il query param.
+Se lo staff ha già integrato l'endpoint (script, Postman, ecc.), coordinare la migrazione.
+App mai in produzione → nessun client reale → applicare direttamente.
+
+**Verifica sprint completato:**
+- [ ] `POST /pms/booking-event` senza header → `403`
+- [ ] `POST /pms/booking-event` con header `X-PMS-Secret: wrong` → `403`
+- [ ] `POST /pms/booking-event` con header corretto → `200`
+- [ ] `POST /staff/resume-bot` con `Authorization: Bearer <token>` → funziona
+- [ ] `POST /staff/resume-bot` con token nel query param → `422` o `403`
+- [ ] `GET /health` non espone `dev_mode`
+- [ ] `GET /docs` in produzione (`DEV_MODE=false`) → `404`
 
 ---
 
@@ -171,10 +230,14 @@ Da verificare ad ogni rilascio:
 
 ```
 □ WHATSAPP_APP_SECRET configurato in .env (non vuoto)
+□ PMS_API_SECRET configurato in .env (non vuoto) ← nuovo (SEC-01)
 □ STAFF_API_TOKEN configurato in .env (≥ 32 caratteri random)
 □ DEV_MODE=false
 □ Redis raggiungibile: redis-cli ping → PONG
 □ Job APScheduler visibili: redis-cli keys "hotel:apscheduler:*"
+□ GET /docs → 404 (non esposto in produzione) ← nuovo (SEC-04)
+□ GET /health non espone dev_mode ← nuovo (SEC-03)
+□ POST /pms/booking-event senza header → 403 ← nuovo (SEC-01)
 □ Webhook risponde 403 a firma errata
 □ Webhook risponde 200 a payload Meta legittimo
 □ Messaggio da ospite conosciuto → risposta personalizzata
@@ -224,7 +287,18 @@ FIX-02
   └── FIX-08 (normalizzazione tel.) ✅
   └── FIX-11 (truncation history)   ✅
 
-[tutti P0-P3 stabili ≥ 1 settimana]
+── SECONDA AUTOPSIA (2026-05-30) ──────────────────────
+
+SEC-01 (auth pms/booking-event)     🔴 blocca deploy
+  └── SEC-05 (rate limiting)        🟡
+
+SEC-02 (token → Authorization hdr)  🟡
+SEC-03 (health senza dev_mode)      🟡
+SEC-04 (docs disabilitati in prod)  🟡
+
+────────────────────────────────────────────────────────
+
+[tutti P0-SEC stabili ≥ 1 settimana]
   └── FIX-12 (rimozione LangGraph)  📋
   └── FIX-13 (IN_HOUSE + is_known)  📋
 
