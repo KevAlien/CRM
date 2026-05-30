@@ -75,6 +75,9 @@ app = FastAPI(
     description="Sistema AI locale per la gestione WhatsApp degli ospiti",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/docs" if DEV_MODE else None,
+    redoc_url="/redoc" if DEV_MODE else None,
+    openapi_url="/openapi.json" if DEV_MODE else None,
 )
 
 
