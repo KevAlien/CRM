@@ -264,7 +264,6 @@ async def health_check() -> JSONResponse:
     return JSONResponse({
         "status": "ok",
         "hotel": HOTEL_NAME,
-        "dev_mode": DEV_MODE,
         "timestamp": datetime.utcnow().isoformat(),
     })
 
