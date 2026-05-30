@@ -17,9 +17,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.jobstores.memory import MemoryJobStore
+from apscheduler.jobstores.redis import RedisJobStore
 from apscheduler.executors.asyncio import AsyncIOExecutor
 
+from config import REDIS_HOST, REDIS_PORT, REDIS_DB
 from graph.state import GuestState
 from memory.redis_store import load_session, save_session, create_new_session
 from graph.builder import hotel_graph
@@ -29,8 +30,16 @@ logger = logging.getLogger(__name__)
 
 
 def _build_scheduler() -> AsyncIOScheduler:
-    """Configura e restituisce l'istanza APScheduler."""
-    jobstores = {"default": MemoryJobStore()}
+    """Configura e restituisce l'istanza APScheduler con RedisJobStore persistente."""
+    jobstores = {
+        "default": RedisJobStore(
+            jobs_key="hotel:apscheduler:jobs",
+            run_times_key="hotel:apscheduler:run_times",
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            db=REDIS_DB,
+        )
+    }
     executors = {"default": AsyncIOExecutor()}
     job_defaults = {"coalesce": True, "max_instances": 1}
 

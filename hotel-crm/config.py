@@ -4,6 +4,7 @@ Tutte le variabili d'ambiente vengono caricate qui.
 """
 
 import os
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,6 +17,10 @@ REASONING_MODEL: str = os.getenv("REASONING_MODEL", "llama3.1:70b")
 
 # --- Redis ---
 REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+_redis_parsed = urlparse(REDIS_URL)
+REDIS_HOST: str = _redis_parsed.hostname or "localhost"
+REDIS_PORT: int = _redis_parsed.port or 6379
+REDIS_DB: int = int(_redis_parsed.path.lstrip("/") or "0")
 
 # --- WhatsApp Business API ---
 WHATSAPP_API_URL: str = os.getenv("WHATSAPP_API_URL", "")
