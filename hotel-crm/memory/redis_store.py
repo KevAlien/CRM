@@ -6,6 +6,7 @@ TTL di 7 giorni per sessioni inattive.
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -27,11 +28,20 @@ KEY_PREFIX = "hotel:session:"
 _redis_pool: aioredis.Redis | None = None
 
 
+def _normalize_phone(phone: str) -> str:
+    """
+    Normalizza il numero di telefono al formato E.164 senza '+'.
+    Es: '+39 333 123456', '0039333123456', '39333123456' → '39333123456'
+    """
+    digits = re.sub(r"\D", "", phone)
+    if digits.startswith("0039"):
+        digits = digits[2:]
+    return digits
+
+
 def _session_key(phone: str) -> str:
     """Genera la chiave Redis per la sessione di un ospite."""
-    # Normalizza il numero (rimuove spazi, trattini)
-    clean = phone.replace(" ", "").replace("-", "")
-    return f"{KEY_PREFIX}{clean}"
+    return f"{KEY_PREFIX}{_normalize_phone(phone)}"
 
 
 async def get_redis_client() -> aioredis.Redis:
