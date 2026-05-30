@@ -12,6 +12,17 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
+# Lock per-utente: serializza le elaborazioni per lo stesso numero di telefono
+# evitando la race condition su messaggi doppi. Dict non va mai svuotato
+# (crescita lineare con il numero di ospiti distinti — trascurabile).
+_user_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_user_lock(phone: str) -> asyncio.Lock:
+    if phone not in _user_locks:
+        _user_locks[phone] = asyncio.Lock()
+    return _user_locks[phone]
+
 import uvicorn
 from fastapi import FastAPI, Request, Response, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -160,11 +171,15 @@ async def receive_whatsapp_message(request: Request) -> JSONResponse:
 async def _process_message(state: GuestState) -> None:
     """
     Elabora il messaggio in background tramite il grafo LangGraph.
+    Il lock per-utente garantisce che due messaggi dello stesso numero
+    non vengano elaborati in parallelo (evita lost update su Redis).
     """
-    try:
-        await hotel_graph.run(state)
-    except Exception as e:
-        logger.error(f"Errore elaborazione messaggio per {state['guest']['phone']}: {e}", exc_info=True)
+    phone = state["guest"]["phone"]
+    async with _get_user_lock(phone):
+        try:
+            await hotel_graph.run(state)
+        except Exception as e:
+            logger.error(f"Errore elaborazione messaggio per {phone}: {e}", exc_info=True)
 
 
 # ─── Endpoint PMS Events ───────────────────────────────────────────────────────
