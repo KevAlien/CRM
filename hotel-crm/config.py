@@ -22,6 +22,7 @@ WHATSAPP_API_URL: str = os.getenv("WHATSAPP_API_URL", "")
 WHATSAPP_TOKEN: str = os.getenv("WHATSAPP_TOKEN", "")
 WHATSAPP_PHONE_NUMBER_ID: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 WHATSAPP_VERIFY_TOKEN: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "hotel_webhook_verify")
+WHATSAPP_APP_SECRET: str = os.getenv("WHATSAPP_APP_SECRET", "")
 
 # --- PMS ---
 PMS_API_URL: str = os.getenv("PMS_API_URL", "")  # Se vuoto, usa il mock locale
@@ -36,6 +37,9 @@ STAFF_NOTIFICATION_PHONE: str = os.getenv("STAFF_NOTIFICATION_PHONE", "")
 # --- Server ---
 HOST: str = os.getenv("HOST", "0.0.0.0")
 PORT: int = int(os.getenv("PORT", "8000"))
+
+# --- Staff ---
+STAFF_API_TOKEN: str = os.getenv("STAFF_API_TOKEN", "")
 
 # --- Modalità sviluppo ---
 DEV_MODE: bool = os.getenv("DEV_MODE", "true").lower() == "true"

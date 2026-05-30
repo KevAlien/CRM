@@ -16,6 +16,8 @@ import uvicorn
 from fastapi import FastAPI, Request, Response, HTTPException, Query
 from fastapi.responses import JSONResponse
 
+import json
+
 from config import (
     HOST, PORT, LOG_LEVEL, WHATSAPP_VERIFY_TOKEN, DEV_MODE, HOTEL_NAME
 )
@@ -23,7 +25,7 @@ from graph.builder import hotel_graph
 from graph.state import GuestState
 from memory.redis_store import create_new_session, load_session
 from scheduler.message_timeline import scheduler, handle_new_booking_event
-from tools.whatsapp import parse_inbound_webhook
+from tools.whatsapp import parse_inbound_webhook, verify_webhook_signature
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -90,8 +92,17 @@ async def receive_whatsapp_message(request: Request) -> JSONResponse:
     Riceve i messaggi WhatsApp in arrivo.
     Ogni messaggio viene elaborato dal grafo LangGraph in modo asincrono.
     """
+    raw_body = await request.body()
+
+    # Verifica firma HMAC-SHA256 (bypass solo in DEV_MODE)
+    if not DEV_MODE:
+        signature = request.headers.get("X-Hub-Signature-256", "")
+        if not verify_webhook_signature(raw_body, signature):
+            logger.warning("[webhook] Firma non valida — richiesta rifiutata")
+            raise HTTPException(status_code=403, detail="Firma webhook non valida")
+
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body)
     except Exception as e:
         logger.error(f"Payload webhook non valido: {e}")
         return JSONResponse({"status": "error", "detail": "Payload non valido"}, status_code=400)

@@ -3,6 +3,8 @@ Interfaccia WhatsApp Business API.
 In DEV_MODE i messaggi vengono stampati su console invece di essere inviati.
 """
 
+import hashlib
+import hmac
 import logging
 from datetime import datetime
 from typing import Any
@@ -14,10 +16,31 @@ from config import (
     WHATSAPP_TOKEN,
     WHATSAPP_PHONE_NUMBER_ID,
     WHATSAPP_TIMEOUT,
+    WHATSAPP_APP_SECRET,
     DEV_MODE,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def verify_webhook_signature(payload_bytes: bytes, signature_header: str) -> bool:
+    """
+    Verifica la firma HMAC-SHA256 del webhook WhatsApp.
+    Ritorna True se la firma è valida, False altrimenti.
+    In assenza di WHATSAPP_APP_SECRET configurato, rifiuta sempre (fail-closed).
+    """
+    if not WHATSAPP_APP_SECRET:
+        logger.error("[webhook] WHATSAPP_APP_SECRET non configurato — verifica firma impossibile")
+        return False
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    expected = hmac.new(
+        WHATSAPP_APP_SECRET.encode(),
+        payload_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    received = signature_header.removeprefix("sha256=")
+    return hmac.compare_digest(expected, received)
 
 
 async def send_whatsapp_message(
