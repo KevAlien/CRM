@@ -52,11 +52,10 @@ async def load_session(phone: str) -> GuestState | None:
             data = json.loads(raw)
             logger.debug(f"Sessione caricata da Redis per {phone}: fase={data.get('current_phase')}")
             return data  # type: ignore[return-value]
-    except Exception:
-        # Fallback in-memory quando Redis non è disponibile
+    except Exception as e:
+        logger.error(f"[redis] FALLBACK IN-MEMORY attivo per {phone} (load). Redis non disponibile: {e}")
         if key in _memory_store:
             data = json.loads(_memory_store[key])
-            logger.debug(f"Sessione caricata dalla memoria per {phone}: fase={data.get('current_phase')}")
             return data  # type: ignore[return-value]
         return None
 
@@ -79,10 +78,9 @@ async def save_session(phone: str, state: GuestState) -> bool:
             await client.setex(key, SESSION_TTL_SECONDS, serialized)
             logger.debug(f"Sessione salvata su Redis per {phone}: fase={state.get('current_phase')}")
             return True
-    except Exception:
-        # Fallback in-memory
+    except Exception as e:
+        logger.error(f"[redis] FALLBACK IN-MEMORY attivo per {phone} (save). Sessione NON persistita su disco: {e}")
         _memory_store[key] = serialized
-        logger.debug(f"Sessione salvata in memoria per {phone}: fase={state.get('current_phase')}")
         return True
 
 
