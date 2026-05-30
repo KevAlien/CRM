@@ -10,14 +10,9 @@ sempre disponibili, nessun restart, messaggi inviati uno alla volta). Presenta *
 orologeria** che si manifestano in produzione entro i primi giorni di operatività, e
 **1 vulnerabilità di sicurezza attiva** dall'istante del deploy.~~
 
-**Sprint 0, 1, 2 completati** — branch `remediation/2026-05-30`, 10 commit applicati.
-I fix P0–P3 sono nel codice. Rimangono i **smoke test runtime** (richiedono Redis + server attivo)
-e gli **Sprint 3–4** (profiling Ollama e tech debt).
-
-**Seconda autopsia di sicurezza (2026-05-30)** — identificate 4 nuove superfici di attacco
-nel codice post-remediation. Il fix del webhook (FIX-01) ha chiuso la porta principale
-lasciandone aperta una equivalente: `POST /pms/booking-event` è completamente privo di
-autenticazione. Aggiunto **Sprint 0-SEC** da eseguire prima di qualsiasi deploy.
+**Sprint 0, 0-SEC, 1, 2 completati** — branch `remediation/2026-05-30`, 15 commit applicati.
+Tutti i fix P0–P3 e i fix di sicurezza sono nel codice. Rimangono i **smoke test runtime**
+(richiedono Redis + server attivo) e gli **Sprint 3–4** (profiling Ollama e tech debt).
 
 ---
 
@@ -47,9 +42,8 @@ autenticazione. Aggiunto **Sprint 0-SEC** da eseguire prima di qualsiasi deploy.
 ---
 
 ## Sprint 0-SEC — Hardening Sicurezza (seconda autopsia)
-**Stato: 🔴 APERTO — blocca il deploy**
+**Stato: ✅ COMPLETATO** — 2026-05-30
 **Obiettivo:** chiudere le superfici di attacco emerse dall'analisi post-remediation.
-**Regola:** nessun deploy in produzione prima che SEC-01 sia applicato.
 
 ### Vulnerabilità identificate
 
@@ -75,28 +69,27 @@ senza autenticazione. Disabilitare in `DEV_MODE=false`.
 `/pms/booking-event` e `/staff/resume-bot` non hanno limiti di frequenza. Bruteforce
 sul token e flood di eventi PMS sono possibili senza freni.
 
-### Fix da applicare
+### Fix applicati
 
-| Fix | Descrizione | File | Rischio |
-|-----|-------------|------|---------|
-| SEC-01 | Aggiungere `PMS_API_SECRET` header su `POST /pms/booking-event` | `main.py`, `config.py` | Basso |
-| SEC-02 | Token staff da query param → header `Authorization: Bearer` | `main.py` | Basso* |
-| SEC-03 | Rimuovere `dev_mode` dalla risposta `/health` | `main.py` | Minimo |
-| SEC-04 | Disabilitare `/docs` e `/redoc` se `DEV_MODE=false` | `main.py` | Minimo |
-| SEC-05 | Rate limiting su endpoint sensibili (slowapi o middleware) | `main.py`, `requirements.txt` | Medio |
+| Fix | Descrizione | Commit | File |
+|-----|-------------|--------|------|
+| ✅ SEC-01 | `PMS_API_SECRET` header obbligatorio su `POST /pms/booking-event` | `28fee55` | `main.py`, `config.py` |
+| ✅ SEC-02 | Token staff da query param → header `Authorization: Bearer` | `ca45b9f` | `main.py` |
+| ✅ SEC-03 | Rimosso `dev_mode` dalla risposta `GET /health` | `8b4dba5` | `main.py` |
+| ✅ SEC-04 | `/docs`, `/redoc`, `/openapi.json` disabilitati con `DEV_MODE=false` | `4fd0d68` | `main.py` |
+| ✅ SEC-05 | Rate limiting: 60/min webhook, 30/min pms, 10/min staff (slowapi) | `ebdb0ac` | `main.py`, `requirements.txt` |
 
-**⚠ SEC-02** — spostare il token in header rompe i client esistenti che usano il query param.
-Se lo staff ha già integrato l'endpoint (script, Postman, ecc.), coordinare la migrazione.
-App mai in produzione → nessun client reale → applicare direttamente.
+**Nuova variabile da aggiungere al `.env`:** `PMS_API_SECRET`
 
-**Verifica sprint completato:**
-- [ ] `POST /pms/booking-event` senza header → `403`
-- [ ] `POST /pms/booking-event` con header `X-PMS-Secret: wrong` → `403`
-- [ ] `POST /pms/booking-event` con header corretto → `200`
-- [ ] `POST /staff/resume-bot` con `Authorization: Bearer <token>` → funziona
-- [ ] `POST /staff/resume-bot` con token nel query param → `422` o `403`
-- [ ] `GET /health` non espone `dev_mode`
-- [ ] `GET /docs` in produzione (`DEV_MODE=false`) → `404`
+**Verifica codice:** ✅
+**Smoke test runtime (da eseguire con server attivo):**
+- 🔲 `POST /pms/booking-event` senza header `X-PMS-Secret` → `403`
+- 🔲 `POST /pms/booking-event` con header errato → `403`
+- 🔲 `POST /pms/booking-event` con header corretto → `200`
+- 🔲 `POST /staff/resume-bot` con `Authorization: Bearer <token>` → funziona
+- 🔲 `POST /staff/resume-bot` senza header → `403`
+- 🔲 `GET /health` non contiene `dev_mode` nel JSON
+- 🔲 `GET /docs` con `DEV_MODE=false` → `404`
 
 ---
 
@@ -229,19 +222,27 @@ I test con 🔲 richiedono ancora un file di test formale.
 Da verificare ad ogni rilascio:
 
 ```
+# — Variabili ambiente —
 □ WHATSAPP_APP_SECRET configurato in .env (non vuoto)
-□ PMS_API_SECRET configurato in .env (non vuoto) ← nuovo (SEC-01)
+□ PMS_API_SECRET configurato in .env (non vuoto)
 □ STAFF_API_TOKEN configurato in .env (≥ 32 caratteri random)
 □ DEV_MODE=false
+
+# — Sicurezza —
+□ GET /docs → 404
+□ GET /health non contiene dev_mode nel JSON
+□ POST /pms/booking-event senza X-PMS-Secret → 403
+□ POST /pms/booking-event con X-PMS-Secret corretto → 200
+□ POST /webhook senza firma → 403
+□ POST /webhook con firma corretta → 200
+□ POST /staff/resume-bot senza Authorization → 403
+□ POST /staff/resume-bot con Authorization: Bearer <token> → funziona
+
+# — Funzionalità —
 □ Redis raggiungibile: redis-cli ping → PONG
 □ Job APScheduler visibili: redis-cli keys "hotel:apscheduler:*"
-□ GET /docs → 404 (non esposto in produzione) ← nuovo (SEC-04)
-□ GET /health non espone dev_mode ← nuovo (SEC-03)
-□ POST /pms/booking-event senza header → 403 ← nuovo (SEC-01)
-□ Webhook risponde 403 a firma errata
-□ Webhook risponde 200 a payload Meta legittimo
 □ Messaggio da ospite conosciuto → risposta personalizzata
-□ Messaggio da sconosciuto con reclamo → notifica staff (non "per quante persone?")
+□ Messaggio da sconosciuto con reclamo → notifica staff
 □ Due messaggi rapidi → entrambi in history, ordine corretto
 □ Connessioni Redis sotto carico ≤ max_connections
 □ Restart processo → job APScheduler ancora presenti
@@ -263,6 +264,11 @@ Da verificare ad ogni rilascio:
 | `bda23cc` | FIX-06 | Endpoint staff resume-bot |
 | `bf4f65b` | FIX-09 | Batch messaggi WhatsApp |
 | `0f75241` | FIX-11 | Truncation conversation_history |
+| `28fee55` | SEC-01 | Auth X-PMS-Secret su /pms/booking-event |
+| `ca45b9f` | SEC-02 | Token staff → Authorization: Bearer |
+| `8b4dba5` | SEC-03 | Rimosso dev_mode da /health |
+| `4fd0d68` | SEC-04 | /docs disabilitati in produzione |
+| `ebdb0ac` | SEC-05 | Rate limiting slowapi |
 
 ---
 
@@ -289,12 +295,12 @@ FIX-02
 
 ── SECONDA AUTOPSIA (2026-05-30) ──────────────────────
 
-SEC-01 (auth pms/booking-event)     🔴 blocca deploy
-  └── SEC-05 (rate limiting)        🟡
+SEC-01 (auth pms/booking-event)     ✅
+  └── SEC-05 (rate limiting)        ✅
 
-SEC-02 (token → Authorization hdr)  🟡
-SEC-03 (health senza dev_mode)      🟡
-SEC-04 (docs disabilitati in prod)  🟡
+SEC-02 (token → Authorization hdr)  ✅
+SEC-03 (health senza dev_mode)      ✅
+SEC-04 (docs disabilitati in prod)  ✅
 
 ────────────────────────────────────────────────────────
 
