@@ -36,7 +36,7 @@ from graph.builder import hotel_graph
 from graph.state import GuestState
 from memory.redis_store import create_new_session, load_session
 from scheduler.message_timeline import scheduler, handle_new_booking_event
-from tools.whatsapp import parse_inbound_webhook, verify_webhook_signature
+from tools.whatsapp import parse_all_inbound_messages, verify_webhook_signature
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -118,51 +118,51 @@ async def receive_whatsapp_message(request: Request) -> JSONResponse:
         logger.error(f"Payload webhook non valido: {e}")
         return JSONResponse({"status": "error", "detail": "Payload non valido"}, status_code=400)
 
-    # Parsing del messaggio
-    message_data = parse_inbound_webhook(payload)
-    if message_data is None:
-        # Non è un messaggio testuale, rispondi OK comunque (Meta lo richiede)
+    # Parsing: itera su tutti i messaggi del payload (WhatsApp può inviare batch)
+    inbound_messages = parse_all_inbound_messages(payload)
+    if not inbound_messages:
+        # Nessun messaggio testuale, rispondi OK comunque (Meta lo richiede)
         return JSONResponse({"status": "ok", "detail": "Evento non gestito"})
 
-    phone = message_data.get("from_phone")
-    text = message_data.get("text", "")
-    contact_name = message_data.get("contact_name", "")
+    for message_data in inbound_messages:
+        phone = message_data.get("from_phone")
+        text = message_data.get("text", "")
+        contact_name = message_data.get("contact_name", "")
 
-    logger.info(f"Messaggio in arrivo da {phone}: {text[:50]}...")
+        logger.info(f"Messaggio in arrivo da {phone}: {text[:50]}...")
 
-    # Crea stato iniziale per il grafo
-    initial_state: GuestState = {
-        "guest": {
-            "phone": phone,
-            "name": contact_name or None,
-            "language": "it",
-            "is_known": False,
-        },
-        "booking": {
-            "id": None,
-            "checkin": None,
-            "checkout": None,
-            "room_type": None,
-            "services": [],
-            "num_guests": None,
-        },
-        "conversation_history": [],
-        "current_phase": "UNKNOWN_CONTACT",
-        "current_task": "simple_question",
-        "recommended_model": "llama3.2:3b",
-        "pms_data": {},
-        "offer": {},
-        "pending_actions": [],
-        "last_interaction": datetime.utcnow().isoformat(),
-        "escalation_reason": None,
-        "inbound_message": text,
-        "urgency": "low",
-        "outbound_message": "",
-        "bot_paused": False,
-    }
+        initial_state: GuestState = {
+            "guest": {
+                "phone": phone,
+                "name": contact_name or None,
+                "language": "it",
+                "is_known": False,
+            },
+            "booking": {
+                "id": None,
+                "checkin": None,
+                "checkout": None,
+                "room_type": None,
+                "services": [],
+                "num_guests": None,
+            },
+            "conversation_history": [],
+            "current_phase": "UNKNOWN_CONTACT",
+            "current_task": "simple_question",
+            "recommended_model": "llama3.2:3b",
+            "pms_data": {},
+            "offer": {},
+            "pending_actions": [],
+            "last_interaction": datetime.utcnow().isoformat(),
+            "escalation_reason": None,
+            "inbound_message": text,
+            "urgency": "low",
+            "outbound_message": "",
+            "bot_paused": False,
+        }
 
-    # Elabora in background per rispondere subito a Meta (entro 5 secondi)
-    asyncio.create_task(_process_message(initial_state))
+        # Elabora in background — il lock per-utente serializza messaggi dello stesso numero
+        asyncio.create_task(_process_message(initial_state))
 
     # WhatsApp richiede risposta 200 immediata
     return JSONResponse({"status": "ok"})
