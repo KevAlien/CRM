@@ -30,7 +30,8 @@ from fastapi.responses import JSONResponse
 import json
 
 from config import (
-    HOST, PORT, LOG_LEVEL, WHATSAPP_VERIFY_TOKEN, DEV_MODE, HOTEL_NAME, STAFF_API_TOKEN
+    HOST, PORT, LOG_LEVEL, WHATSAPP_VERIFY_TOKEN, DEV_MODE, HOTEL_NAME,
+    STAFF_API_TOKEN, PMS_API_SECRET,
 )
 from graph.builder import hotel_graph
 from graph.state import GuestState
@@ -189,6 +190,7 @@ async def handle_pms_booking(request: Request) -> JSONResponse:
     """
     Riceve eventi di nuova prenotazione dal PMS.
     Pianifica la timeline di messaggi proattivi.
+    Richiede header X-PMS-Secret con il valore di PMS_API_SECRET.
 
     Payload atteso:
     {
@@ -196,6 +198,12 @@ async def handle_pms_booking(request: Request) -> JSONResponse:
         "booking": { ... dati prenotazione ... }
     }
     """
+    if not DEV_MODE:
+        secret = request.headers.get("X-PMS-Secret", "")
+        if not PMS_API_SECRET or secret != PMS_API_SECRET:
+            logger.warning("[pms] Richiesta /pms/booking-event rifiutata: secret non valido")
+            raise HTTPException(status_code=403, detail="Secret non valido")
+
     try:
         data = await request.json()
     except Exception:

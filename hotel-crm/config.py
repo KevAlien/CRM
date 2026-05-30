@@ -31,6 +31,7 @@ WHATSAPP_APP_SECRET: str = os.getenv("WHATSAPP_APP_SECRET", "")
 
 # --- PMS ---
 PMS_API_URL: str = os.getenv("PMS_API_URL", "")  # Se vuoto, usa il mock locale
+PMS_API_SECRET: str = os.getenv("PMS_API_SECRET", "")
 
 # --- Hotel ---
 HOTEL_NAME: str = os.getenv("HOTEL_NAME", "Hotel Demo")
