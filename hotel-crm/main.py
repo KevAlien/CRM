@@ -26,8 +26,13 @@ def _get_user_lock(phone: str) -> asyncio.Lock:
 import uvicorn
 from fastapi import FastAPI, Header, Request, Response, HTTPException, Query
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 import json
+
+limiter = Limiter(key_func=get_remote_address)
 
 from config import (
     HOST, PORT, LOG_LEVEL, WHATSAPP_VERIFY_TOKEN, DEV_MODE, HOTEL_NAME,
@@ -79,6 +84,8 @@ app = FastAPI(
     redoc_url="/redoc" if DEV_MODE else None,
     openapi_url="/openapi.json" if DEV_MODE else None,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ─── Webhook WhatsApp ──────────────────────────────────────────────────────────
@@ -102,6 +109,7 @@ async def verify_webhook(
 
 
 @app.post("/webhook")
+@limiter.limit("60/minute")
 async def receive_whatsapp_message(request: Request) -> JSONResponse:
     """
     Riceve i messaggi WhatsApp in arrivo.
@@ -189,6 +197,7 @@ async def _process_message(state: GuestState) -> None:
 # ─── Endpoint PMS Events ───────────────────────────────────────────────────────
 
 @app.post("/pms/booking-event")
+@limiter.limit("30/minute")
 async def handle_pms_booking(request: Request) -> JSONResponse:
     """
     Riceve eventi di nuova prenotazione dal PMS.
@@ -231,7 +240,9 @@ async def handle_pms_booking(request: Request) -> JSONResponse:
 # ─── Staff API ────────────────────────────────────────────────────────────────
 
 @app.post("/staff/resume-bot")
+@limiter.limit("10/minute")
 async def resume_bot(
+    request: Request,
     phone: str = Query(..., description="Numero di telefono dell'ospite"),
     authorization: str = Header(None, alias="Authorization"),
 ) -> JSONResponse:
