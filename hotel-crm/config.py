@@ -4,6 +4,7 @@ Tutte le variabili d'ambiente vengono caricate qui.
 """
 
 import os
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,15 +17,21 @@ REASONING_MODEL: str = os.getenv("REASONING_MODEL", "llama3.1:70b")
 
 # --- Redis ---
 REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+_redis_parsed = urlparse(REDIS_URL)
+REDIS_HOST: str = _redis_parsed.hostname or "localhost"
+REDIS_PORT: int = _redis_parsed.port or 6379
+REDIS_DB: int = int(_redis_parsed.path.lstrip("/") or "0")
 
 # --- WhatsApp Business API ---
 WHATSAPP_API_URL: str = os.getenv("WHATSAPP_API_URL", "")
 WHATSAPP_TOKEN: str = os.getenv("WHATSAPP_TOKEN", "")
 WHATSAPP_PHONE_NUMBER_ID: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 WHATSAPP_VERIFY_TOKEN: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "hotel_webhook_verify")
+WHATSAPP_APP_SECRET: str = os.getenv("WHATSAPP_APP_SECRET", "")
 
 # --- PMS ---
 PMS_API_URL: str = os.getenv("PMS_API_URL", "")  # Se vuoto, usa il mock locale
+PMS_API_SECRET: str = os.getenv("PMS_API_SECRET", "")
 
 # --- Hotel ---
 HOTEL_NAME: str = os.getenv("HOTEL_NAME", "Hotel Demo")
@@ -36,6 +43,9 @@ STAFF_NOTIFICATION_PHONE: str = os.getenv("STAFF_NOTIFICATION_PHONE", "")
 # --- Server ---
 HOST: str = os.getenv("HOST", "0.0.0.0")
 PORT: int = int(os.getenv("PORT", "8000"))
+
+# --- Staff ---
+STAFF_API_TOKEN: str = os.getenv("STAFF_API_TOKEN", "")
 
 # --- Modalità sviluppo ---
 DEV_MODE: bool = os.getenv("DEV_MODE", "true").lower() == "true"

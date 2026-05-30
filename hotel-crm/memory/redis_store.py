@@ -6,6 +6,7 @@ TTL di 7 giorni per sessioni inattive.
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -23,17 +24,36 @@ SESSION_TTL_SECONDS = 7 * 24 * 3600
 _memory_store: dict[str, str] = {}
 KEY_PREFIX = "hotel:session:"
 
+# Pool singleton — creato una volta sola, riusato per tutte le operazioni
+_redis_pool: aioredis.Redis | None = None
+
+
+def _normalize_phone(phone: str) -> str:
+    """
+    Normalizza il numero di telefono al formato E.164 senza '+'.
+    Es: '+39 333 123456', '0039333123456', '39333123456' → '39333123456'
+    """
+    digits = re.sub(r"\D", "", phone)
+    if digits.startswith("0039"):
+        digits = digits[2:]
+    return digits
+
 
 def _session_key(phone: str) -> str:
     """Genera la chiave Redis per la sessione di un ospite."""
-    # Normalizza il numero (rimuove spazi, trattini)
-    clean = phone.replace(" ", "").replace("-", "")
-    return f"{KEY_PREFIX}{clean}"
+    return f"{KEY_PREFIX}{_normalize_phone(phone)}"
 
 
 async def get_redis_client() -> aioredis.Redis:
-    """Crea e ritorna un client Redis asincrono."""
-    return aioredis.from_url(REDIS_URL, decode_responses=True)
+    """Ritorna il pool Redis singleton, creandolo al primo utilizzo."""
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = aioredis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            max_connections=20,
+        )
+    return _redis_pool
 
 
 async def load_session(phone: str) -> GuestState | None:
@@ -45,18 +65,16 @@ async def load_session(phone: str) -> GuestState | None:
     key = _session_key(phone)
     try:
         client = await get_redis_client()
-        async with client:
-            raw = await client.get(key)
-            if raw is None:
-                return None
-            data = json.loads(raw)
-            logger.debug(f"Sessione caricata da Redis per {phone}: fase={data.get('current_phase')}")
-            return data  # type: ignore[return-value]
-    except Exception:
-        # Fallback in-memory quando Redis non è disponibile
+        raw = await client.get(key)
+        if raw is None:
+            return None
+        data = json.loads(raw)
+        logger.debug(f"Sessione caricata da Redis per {phone}: fase={data.get('current_phase')}")
+        return data  # type: ignore[return-value]
+    except Exception as e:
+        logger.error(f"[redis] FALLBACK IN-MEMORY attivo per {phone} (load). Redis non disponibile: {e}")
         if key in _memory_store:
             data = json.loads(_memory_store[key])
-            logger.debug(f"Sessione caricata dalla memoria per {phone}: fase={data.get('current_phase')}")
             return data  # type: ignore[return-value]
         return None
 
@@ -68,6 +86,11 @@ async def save_session(phone: str, state: GuestState) -> bool:
     Aggiorna automaticamente last_interaction.
     Ritorna True se il salvataggio ha avuto successo.
     """
+    MAX_HISTORY_ENTRIES = 50
+    history = state.get("conversation_history", [])
+    if len(history) > MAX_HISTORY_ENTRIES:
+        state["conversation_history"] = history[-MAX_HISTORY_ENTRIES:]
+
     # Aggiorna timestamp ultima interazione
     state["last_interaction"] = datetime.utcnow().isoformat()
     key = _session_key(phone)
@@ -75,14 +98,12 @@ async def save_session(phone: str, state: GuestState) -> bool:
 
     try:
         client = await get_redis_client()
-        async with client:
-            await client.setex(key, SESSION_TTL_SECONDS, serialized)
-            logger.debug(f"Sessione salvata su Redis per {phone}: fase={state.get('current_phase')}")
-            return True
-    except Exception:
-        # Fallback in-memory
+        await client.setex(key, SESSION_TTL_SECONDS, serialized)
+        logger.debug(f"Sessione salvata su Redis per {phone}: fase={state.get('current_phase')}")
+        return True
+    except Exception as e:
+        logger.error(f"[redis] FALLBACK IN-MEMORY attivo per {phone} (save). Sessione NON persistita su disco: {e}")
         _memory_store[key] = serialized
-        logger.debug(f"Sessione salvata in memoria per {phone}: fase={state.get('current_phase')}")
         return True
 
 
@@ -92,10 +113,9 @@ async def delete_session(phone: str) -> bool:
     _memory_store.pop(key, None)  # Rimuovi sempre dal fallback in-memory
     try:
         client = await get_redis_client()
-        async with client:
-            await client.delete(key)
-            logger.info(f"Sessione eliminata da Redis per {phone}")
-            return True
+        await client.delete(key)
+        logger.info(f"Sessione eliminata da Redis per {phone}")
+        return True
     except Exception as e:
         logger.debug(f"Redis non disponibile per eliminazione {phone}: {e}")
         return True  # Rimossa dal fallback in-memory sopra
@@ -106,8 +126,7 @@ async def session_exists(phone: str) -> bool:
     key = _session_key(phone)
     try:
         client = await get_redis_client()
-        async with client:
-            return bool(await client.exists(key))
+        return bool(await client.exists(key))
     except Exception:
         return key in _memory_store
 

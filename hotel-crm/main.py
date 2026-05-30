@@ -12,18 +12,37 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
+# Lock per-utente: serializza le elaborazioni per lo stesso numero di telefono
+# evitando la race condition su messaggi doppi. Dict non va mai svuotato
+# (crescita lineare con il numero di ospiti distinti — trascurabile).
+_user_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_user_lock(phone: str) -> asyncio.Lock:
+    if phone not in _user_locks:
+        _user_locks[phone] = asyncio.Lock()
+    return _user_locks[phone]
+
 import uvicorn
-from fastapi import FastAPI, Request, Response, HTTPException, Query
+from fastapi import FastAPI, Header, Request, Response, HTTPException, Query
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+import json
+
+limiter = Limiter(key_func=get_remote_address)
 
 from config import (
-    HOST, PORT, LOG_LEVEL, WHATSAPP_VERIFY_TOKEN, DEV_MODE, HOTEL_NAME
+    HOST, PORT, LOG_LEVEL, WHATSAPP_VERIFY_TOKEN, DEV_MODE, HOTEL_NAME,
+    STAFF_API_TOKEN, PMS_API_SECRET,
 )
 from graph.builder import hotel_graph
 from graph.state import GuestState
 from memory.redis_store import create_new_session, load_session
 from scheduler.message_timeline import scheduler, handle_new_booking_event
-from tools.whatsapp import parse_inbound_webhook
+from tools.whatsapp import parse_all_inbound_messages, verify_webhook_signature
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -61,7 +80,12 @@ app = FastAPI(
     description="Sistema AI locale per la gestione WhatsApp degli ospiti",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/docs" if DEV_MODE else None,
+    redoc_url="/redoc" if DEV_MODE else None,
+    openapi_url="/openapi.json" if DEV_MODE else None,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ─── Webhook WhatsApp ──────────────────────────────────────────────────────────
@@ -85,62 +109,72 @@ async def verify_webhook(
 
 
 @app.post("/webhook")
+@limiter.limit("60/minute")
 async def receive_whatsapp_message(request: Request) -> JSONResponse:
     """
     Riceve i messaggi WhatsApp in arrivo.
     Ogni messaggio viene elaborato dal grafo LangGraph in modo asincrono.
     """
+    raw_body = await request.body()
+
+    # Verifica firma HMAC-SHA256 (bypass solo in DEV_MODE)
+    if not DEV_MODE:
+        signature = request.headers.get("X-Hub-Signature-256", "")
+        if not verify_webhook_signature(raw_body, signature):
+            logger.warning("[webhook] Firma non valida — richiesta rifiutata")
+            raise HTTPException(status_code=403, detail="Firma webhook non valida")
+
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body)
     except Exception as e:
         logger.error(f"Payload webhook non valido: {e}")
         return JSONResponse({"status": "error", "detail": "Payload non valido"}, status_code=400)
 
-    # Parsing del messaggio
-    message_data = parse_inbound_webhook(payload)
-    if message_data is None:
-        # Non è un messaggio testuale, rispondi OK comunque (Meta lo richiede)
+    # Parsing: itera su tutti i messaggi del payload (WhatsApp può inviare batch)
+    inbound_messages = parse_all_inbound_messages(payload)
+    if not inbound_messages:
+        # Nessun messaggio testuale, rispondi OK comunque (Meta lo richiede)
         return JSONResponse({"status": "ok", "detail": "Evento non gestito"})
 
-    phone = message_data.get("from_phone")
-    text = message_data.get("text", "")
-    contact_name = message_data.get("contact_name", "")
+    for message_data in inbound_messages:
+        phone = message_data.get("from_phone")
+        text = message_data.get("text", "")
+        contact_name = message_data.get("contact_name", "")
 
-    logger.info(f"Messaggio in arrivo da {phone}: {text[:50]}...")
+        logger.info(f"Messaggio in arrivo da {phone}: {text[:50]}...")
 
-    # Crea stato iniziale per il grafo
-    initial_state: GuestState = {
-        "guest": {
-            "phone": phone,
-            "name": contact_name or None,
-            "language": "it",
-            "is_known": False,
-        },
-        "booking": {
-            "id": None,
-            "checkin": None,
-            "checkout": None,
-            "room_type": None,
-            "services": [],
-            "num_guests": None,
-        },
-        "conversation_history": [],
-        "current_phase": "UNKNOWN_CONTACT",
-        "current_task": "simple_question",
-        "recommended_model": "llama3.2:3b",
-        "pms_data": {},
-        "offer": {},
-        "pending_actions": [],
-        "last_interaction": datetime.utcnow().isoformat(),
-        "escalation_reason": None,
-        "inbound_message": text,
-        "urgency": "low",
-        "outbound_message": "",
-        "bot_paused": False,
-    }
+        initial_state: GuestState = {
+            "guest": {
+                "phone": phone,
+                "name": contact_name or None,
+                "language": "it",
+                "is_known": False,
+            },
+            "booking": {
+                "id": None,
+                "checkin": None,
+                "checkout": None,
+                "room_type": None,
+                "services": [],
+                "num_guests": None,
+            },
+            "conversation_history": [],
+            "current_phase": "UNKNOWN_CONTACT",
+            "current_task": "simple_question",
+            "recommended_model": "llama3.2:3b",
+            "pms_data": {},
+            "offer": {},
+            "pending_actions": [],
+            "last_interaction": datetime.utcnow().isoformat(),
+            "escalation_reason": None,
+            "inbound_message": text,
+            "urgency": "low",
+            "outbound_message": "",
+            "bot_paused": False,
+        }
 
-    # Elabora in background per rispondere subito a Meta (entro 5 secondi)
-    asyncio.create_task(_process_message(initial_state))
+        # Elabora in background — il lock per-utente serializza messaggi dello stesso numero
+        asyncio.create_task(_process_message(initial_state))
 
     # WhatsApp richiede risposta 200 immediata
     return JSONResponse({"status": "ok"})
@@ -149,20 +183,26 @@ async def receive_whatsapp_message(request: Request) -> JSONResponse:
 async def _process_message(state: GuestState) -> None:
     """
     Elabora il messaggio in background tramite il grafo LangGraph.
+    Il lock per-utente garantisce che due messaggi dello stesso numero
+    non vengano elaborati in parallelo (evita lost update su Redis).
     """
-    try:
-        await hotel_graph.run(state)
-    except Exception as e:
-        logger.error(f"Errore elaborazione messaggio per {state['guest']['phone']}: {e}", exc_info=True)
+    phone = state["guest"]["phone"]
+    async with _get_user_lock(phone):
+        try:
+            await hotel_graph.run(state)
+        except Exception as e:
+            logger.error(f"Errore elaborazione messaggio per {phone}: {e}", exc_info=True)
 
 
 # ─── Endpoint PMS Events ───────────────────────────────────────────────────────
 
 @app.post("/pms/booking-event")
+@limiter.limit("30/minute")
 async def handle_pms_booking(request: Request) -> JSONResponse:
     """
     Riceve eventi di nuova prenotazione dal PMS.
     Pianifica la timeline di messaggi proattivi.
+    Richiede header X-PMS-Secret con il valore di PMS_API_SECRET.
 
     Payload atteso:
     {
@@ -170,6 +210,12 @@ async def handle_pms_booking(request: Request) -> JSONResponse:
         "booking": { ... dati prenotazione ... }
     }
     """
+    if not DEV_MODE:
+        secret = request.headers.get("X-PMS-Secret", "")
+        if not PMS_API_SECRET or secret != PMS_API_SECRET:
+            logger.warning("[pms] Richiesta /pms/booking-event rifiutata: secret non valido")
+            raise HTTPException(status_code=403, detail="Secret non valido")
+
     try:
         data = await request.json()
     except Exception:
@@ -191,6 +237,39 @@ async def handle_pms_booking(request: Request) -> JSONResponse:
     return JSONResponse({"status": "error", "message": f"Evento sconosciuto: {event_type}"}, status_code=400)
 
 
+# ─── Staff API ────────────────────────────────────────────────────────────────
+
+@app.post("/staff/resume-bot")
+@limiter.limit("10/minute")
+async def resume_bot(
+    request: Request,
+    phone: str = Query(..., description="Numero di telefono dell'ospite"),
+    authorization: str = Header(None, alias="Authorization"),
+) -> JSONResponse:
+    """
+    Riattiva il bot per una sessione in pausa (post-escalation).
+    Richiede header: Authorization: Bearer <STAFF_API_TOKEN>
+    """
+    token = ""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
+    if not STAFF_API_TOKEN or token != STAFF_API_TOKEN:
+        raise HTTPException(status_code=403, detail="Token non valido")
+
+    state = await load_session(phone)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Sessione non trovata per {phone}")
+
+    state["bot_paused"] = False
+    state["current_phase"] = "IDLE"
+    state["escalation_reason"] = None
+    from memory.redis_store import save_session as _save
+    await _save(phone, state)
+
+    logger.info(f"[staff] Bot riattivato per {phone}")
+    return JSONResponse({"status": "ok", "phone": phone, "new_phase": "IDLE"})
+
+
 # ─── Health Check ──────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -199,7 +278,6 @@ async def health_check() -> JSONResponse:
     return JSONResponse({
         "status": "ok",
         "hotel": HOTEL_NAME,
-        "dev_mode": DEV_MODE,
         "timestamp": datetime.utcnow().isoformat(),
     })
 

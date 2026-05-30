@@ -3,6 +3,8 @@ Interfaccia WhatsApp Business API.
 In DEV_MODE i messaggi vengono stampati su console invece di essere inviati.
 """
 
+import hashlib
+import hmac
 import logging
 from datetime import datetime
 from typing import Any
@@ -14,10 +16,31 @@ from config import (
     WHATSAPP_TOKEN,
     WHATSAPP_PHONE_NUMBER_ID,
     WHATSAPP_TIMEOUT,
+    WHATSAPP_APP_SECRET,
     DEV_MODE,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def verify_webhook_signature(payload_bytes: bytes, signature_header: str) -> bool:
+    """
+    Verifica la firma HMAC-SHA256 del webhook WhatsApp.
+    Ritorna True se la firma è valida, False altrimenti.
+    In assenza di WHATSAPP_APP_SECRET configurato, rifiuta sempre (fail-closed).
+    """
+    if not WHATSAPP_APP_SECRET:
+        logger.error("[webhook] WHATSAPP_APP_SECRET non configurato — verifica firma impossibile")
+        return False
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    expected = hmac.new(
+        WHATSAPP_APP_SECRET.encode(),
+        payload_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    received = signature_header.removeprefix("sha256=")
+    return hmac.compare_digest(expected, received)
 
 
 async def send_whatsapp_message(
@@ -99,37 +122,43 @@ async def send_staff_notification(
 
 def parse_inbound_webhook(payload: dict[str, Any]) -> dict[str, Any] | None:
     """
-    Estrae il messaggio in arrivo dal payload webhook WhatsApp.
+    Estrae il primo messaggio testuale dal payload webhook WhatsApp.
     Ritorna None se il payload non contiene un messaggio testuale valido.
+    Deprecata: preferire parse_all_inbound_messages per gestire i batch.
     """
+    messages = parse_all_inbound_messages(payload)
+    return messages[0] if messages else None
+
+
+def parse_all_inbound_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Estrae tutti i messaggi testuali da un payload webhook WhatsApp.
+    WhatsApp può inviare più messaggi nello stesso evento (batch).
+    Ritorna lista vuota se non ci sono messaggi testuali validi.
+    """
+    results = []
     try:
-        entry = payload.get("entry", [{}])[0]
-        changes = entry.get("changes", [{}])[0]
-        value = changes.get("value", {})
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                contacts = value.get("contacts", [{}])
+                contact = contacts[0] if contacts else {}
+                contact_name = contact.get("profile", {}).get("name", "")
 
-        messages = value.get("messages", [])
-        if not messages:
-            return None
-
-        msg = messages[0]
-        if msg.get("type") != "text":
-            # Gestisci solo messaggi testuali per ora
-            logger.info(f"Messaggio non testuale ricevuto: {msg.get('type')}")
-            return None
-
-        contacts = value.get("contacts", [{}])
-        contact = contacts[0] if contacts else {}
-
-        return {
-            "from_phone": msg.get("from"),
-            "message_id": msg.get("id"),
-            "timestamp": msg.get("timestamp"),
-            "text": msg.get("text", {}).get("body", ""),
-            "contact_name": contact.get("profile", {}).get("name", ""),
-        }
-    except (IndexError, KeyError, TypeError) as e:
+                for msg in value.get("messages", []):
+                    if msg.get("type") != "text":
+                        logger.info(f"Messaggio non testuale ignorato: {msg.get('type')}")
+                        continue
+                    results.append({
+                        "from_phone": msg.get("from"),
+                        "message_id": msg.get("id"),
+                        "timestamp": msg.get("timestamp"),
+                        "text": msg.get("text", {}).get("body", ""),
+                        "contact_name": contact_name,
+                    })
+    except (KeyError, TypeError) as e:
         logger.error(f"Errore parsing webhook WhatsApp: {e}")
-        return None
+    return results
 
 
 def _log_dev_message(to_phone: str, message: str) -> None:

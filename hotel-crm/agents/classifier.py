@@ -71,12 +71,12 @@ def _apply_keyword_rules(message: str, is_known: bool, current_phase: str) -> Ta
     msg_lower = message.lower()
 
     # Regola speciale: contatto sconosciuto che non fa domanda semplice → acquire_contact
+    # Eccezione: i reclami vanno in escalation anche da sconosciuti
     if not is_known and current_phase == "UNKNOWN_CONTACT":
-        # Se non è una domanda semplice già identificata
         for keywords, task in KEYWORD_RULES:
             if any(kw in msg_lower for kw in keywords):
-                if task == "simple_question":
-                    return "simple_question"
+                if task in ("simple_question", "complaint"):
+                    return task
                 # Per tutto il resto: acquire_contact
                 return "acquire_contact"
         # Nessuna regola → acquire_contact per unknown
@@ -230,7 +230,8 @@ async def classifier_node(state: GuestState) -> GuestState:
         task_type = "simple_question"
 
     # Applica regola: unknown contact → acquire_contact (override sicurezza)
-    if not is_known and task_type not in ["simple_question", "out_of_scope"]:
+    # "complaint" è escluso: un reclamo da sconosciuto va in escalation, non ignorato
+    if not is_known and task_type not in ["simple_question", "out_of_scope", "complaint"]:
         task_type = "acquire_contact"
 
     elapsed = (datetime.utcnow() - t_start).total_seconds() * 1000
