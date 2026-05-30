@@ -30,7 +30,7 @@ from fastapi.responses import JSONResponse
 import json
 
 from config import (
-    HOST, PORT, LOG_LEVEL, WHATSAPP_VERIFY_TOKEN, DEV_MODE, HOTEL_NAME
+    HOST, PORT, LOG_LEVEL, WHATSAPP_VERIFY_TOKEN, DEV_MODE, HOTEL_NAME, STAFF_API_TOKEN
 )
 from graph.builder import hotel_graph
 from graph.state import GuestState
@@ -215,6 +215,34 @@ async def handle_pms_booking(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "message": "Timeline annullata"})
 
     return JSONResponse({"status": "error", "message": f"Evento sconosciuto: {event_type}"}, status_code=400)
+
+
+# ─── Staff API ────────────────────────────────────────────────────────────────
+
+@app.post("/staff/resume-bot")
+async def resume_bot(
+    phone: str = Query(..., description="Numero di telefono dell'ospite"),
+    token: str = Query(..., description="Token di autenticazione staff"),
+) -> JSONResponse:
+    """
+    Riattiva il bot per una sessione in pausa (post-escalation).
+    Richiede STAFF_API_TOKEN configurato in .env.
+    """
+    if not STAFF_API_TOKEN or token != STAFF_API_TOKEN:
+        raise HTTPException(status_code=403, detail="Token non valido")
+
+    state = await load_session(phone)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Sessione non trovata per {phone}")
+
+    state["bot_paused"] = False
+    state["current_phase"] = "IDLE"
+    state["escalation_reason"] = None
+    from memory.redis_store import save_session as _save
+    await _save(phone, state)
+
+    logger.info(f"[staff] Bot riattivato per {phone}")
+    return JSONResponse({"status": "ok", "phone": phone, "new_phase": "IDLE"})
 
 
 # ─── Health Check ──────────────────────────────────────────────────────────────
